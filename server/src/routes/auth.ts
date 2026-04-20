@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import * as z from "zod";
 import bcrypt from "bcryptjs";
 import { db } from "../db/client";
-import jwt from "jsonwebtoken"
+import jwt from "jsonwebtoken";
 
 const auth = new Hono();
 
@@ -51,25 +51,59 @@ auth.post("/login", async (c) => {
     return c.json({ error: result.error.errors }, 400);
   }
 
-  const user = await db.collection("users").findOne({ email : result.data.email })
+  const user = await db
+    .collection("users")
+    .findOne({ email: result.data.email });
 
   if (!user) {
-    return c.json({ error: "Invalid credentials" }, 401)
+    return c.json({ error: "Invalid credentials" }, 401);
   }
 
-  const validPassword = await bcrypt.compare(result.data.password, user.password)
+  const validPassword = await bcrypt.compare(
+    result.data.password,
+    user.password,
+  );
   if (!validPassword) {
-    return c.json({ error: "invalid credentials" }, 401)
+    return c.json({ error: "invalid credentials" }, 401);
   }
 
   const token = jwt.sign(
     { userId: user._id, email: user.email },
     process.env.JWT_SECRET!,
-    { expiresIn: "15m" }
-  )
+    { expiresIn: "15m" },
+  );
 
-  return c.json({ token }, 200)
+  const refreshToken = jwt.sign(
+    { userId: user._id },
+    process.env.JWT_REFRESH_SECRET!,
+    { expiresIn: "7d" },
+  );
 
+  c.header(
+    "Set-Cookie",
+    `refreshToken=${refreshToken}; HttpOnly; Path=/; Max-Age=${7 * 24 * 60 * 60}`,
+  );
+  return c.json({ token }, 200);
+});
+
+auth.post("/refresh", async (c) => {
+  const cookie = c.req.header("cookie");
+  const refreshToken = cookie?.split("refreshToken=")[1]?.split(";")[0];
+
+  if (!refreshToken) {
+    return c.json({ error: "No refresh token" }, 401);
+  }
+
+  const payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!) as {
+    userId: string;
+  };
+  const newToken = jwt.sign(
+    { userId: payload.userId },
+    process.env.JWT_SECRET!,
+    { expiresIn: "15m" },
+  );
+
+  return c.json({ token: newToken }, 200);
 });
 
 export default auth;
